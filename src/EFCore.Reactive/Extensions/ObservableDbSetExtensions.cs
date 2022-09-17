@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using EFCore.Reactive;
+﻿using EFCore.Reactive;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace Microsoft.EntityFrameworkCore

@@ -9,9 +9,7 @@ namespace EFCore.Reactive
         private PreSaveChangedEntity[]? preSaveChanges;
         private readonly IObserver<EntityChange[]> observer;
 
-        public ObserverSaveChangesInterceptor(
-            IObserver<EntityChange[]> observer
-        )
+        public ObserverSaveChangesInterceptor(IObserver<EntityChange[]> observer)
         {
             this.observer = observer;
         }
@@ -55,13 +53,13 @@ namespace EFCore.Reactive
                             changedPropertyNames: e.State switch
                             {
                                 EntityState.Added
-                                  => e.Properties.Select(p => p.Metadata.Name).ToArray(),
+                                    => e.Properties.Select(p => p.Metadata.Name).ToArray(),
                                 EntityState.Deleted => Array.Empty<string>(),
                                 EntityState.Modified
-                                  => e.Properties
-                                      .Where(p => p.IsModified)
-                                      .Select(p => p.Metadata.Name)
-                                      .ToArray(),
+                                    => e.Properties
+                                        .Where(p => p.IsModified)
+                                        .Select(p => p.Metadata.Name)
+                                        .ToArray(),
                                 _ => throw new NotImplementedException()
                             }
                         )
@@ -127,106 +125,105 @@ namespace EFCore.Reactive
 
             return preSaveChanges
                 .Where(c => c.Entry != null)
-                .Select<PreSaveChangedEntity, EntityChange>(
-                    c =>
+                .Select<PreSaveChangedEntity, EntityChange>(c =>
+                {
+                    var entityType = context.Model.FindEntityType(c.Entry!.Metadata.Name);
+
+                    var skipNavigation = context.Model
+                        .GetEntityTypes()
+                        .SelectMany(e => e.GetSkipNavigations())
+                        .FirstOrDefault(s => s.JoinEntityType == entityType);
+
+                    if (skipNavigation == null)
                     {
-                        var entityType = context.Model.FindEntityType(c.Entry!.Metadata.Name);
-
-                        var skipNavigation = context.Model
-                            .GetEntityTypes()
-                            .SelectMany(e => e.GetSkipNavigations())
-                            .FirstOrDefault(s => s.JoinEntityType == entityType);
-
-                        if (skipNavigation == null)
-                        {
-                            return new PropertiesChange(
-                                changeType: c.ChangeType,
-                                keyValues: c.Entry.Metadata.FindPrimaryKey()!.Properties
-                                    .Select(p =>
-                                    {
-                                        var property = c.Entry.Property(p.Name);
-                                        if (property?.CurrentValue == null)
-                                        {
-                                            throw new NotImplementedException();
-                                        }
-                                        return property.CurrentValue;
-                                    })
-                                    .ToArray(),
-                                entityTypeName: c.Entry.Metadata.Name,
-                                changedProperties: c.ChangeType switch
+                        return new PropertiesChange(
+                            keyValues: c.Entry.Metadata
+                                .FindPrimaryKey()!
+                                .Properties.Select(p =>
                                 {
-                                    EntityState.Added
-                                      => c.Entry.Properties.ToDictionary(
-                                          p => p.Metadata.Name,
-                                          p => p.CurrentValue
-                                      ),
-                                    EntityState.Deleted => new(),
-                                    EntityState.Modified
-                                      => c.Entry.Properties.ToDictionary(
-                                          p => p.Metadata.Name,
-                                          p => p.CurrentValue
-                                      ),
-                                    _ => throw new NotImplementedException()
-                                }
-                            );
-                        }
-                        else
-                        {
-                            var skipKeys = skipNavigation.ForeignKey;
-                            var primaryKey = c.Entry.Metadata.FindPrimaryKey();
-                            if (primaryKey == null)
+                                    var property = c.Entry.Property(p.Name);
+                                    if (property?.CurrentValue == null)
+                                    {
+                                        throw new NotImplementedException();
+                                    }
+                                    return property.CurrentValue;
+                                })
+                                .ToArray(),
+                            changeType: c.ChangeType,
+                            entityTypeName: c.Entry.Metadata.Name,
+                            changedProperties: c.ChangeType switch
                             {
-                                throw new NotImplementedException();
+                                EntityState.Added
+                                    => c.Entry.Properties.ToDictionary(
+                                        p => p.Metadata.Name,
+                                        p => p.CurrentValue
+                                    ),
+                                EntityState.Deleted => new(),
+                                EntityState.Modified
+                                    => c.Entry.Properties.ToDictionary(
+                                        p => p.Metadata.Name,
+                                        p => p.CurrentValue
+                                    ),
+                                _ => throw new NotImplementedException()
                             }
-                            return new SkipNavigationChange(
-                                changeType: c.ChangeType,
-                                keyValues: primaryKey.Properties
-                                    .Select(p =>
-                                    {
-                                        var property = c.Entry.Property(p.Name);
-                                        if (property?.CurrentValue == null)
-                                        {
-                                            throw new NotImplementedException();
-                                        }
-                                        return property.CurrentValue;
-                                    })
-                                    .ToArray(),
-                                entityTypeName: c.Entry.Metadata.Name,
-                                declaringEntityTypeName: skipNavigation.DeclaringEntityType.Name,
-                                targetKeyValues: c.Entry.Properties
-                                    .Where(
-                                        p =>
-                                            !skipNavigation.ForeignKey.Properties.Any(
-                                                skipProp => skipProp == p.Metadata
-                                            )
-                                    )
-                                    .Select(p =>
-                                    {
-                                        var property = c.Entry.Property(p.Metadata.Name);
-                                        if (property?.CurrentValue == null)
-                                        {
-                                            throw new NotImplementedException();
-                                        }
-                                        return property.CurrentValue;
-                                    })
-                                    .ToArray(),
-                                targetEntityTypeName: skipNavigation.TargetEntityType.Name,
-                                declaringKeyValues: skipNavigation.ForeignKey.Properties
-                                    .Select(p =>
-                                    {
-                                        var property = c.Entry.Property(p.Name);
-                                        if (property?.CurrentValue == null)
-                                        {
-                                            throw new NotImplementedException();
-                                        }
-                                        return property.CurrentValue;
-                                    })
-                                    .ToArray(),
-                                navigationPropertyName: skipNavigation.PropertyInfo!.Name
-                            );
-                        }
+                        );
                     }
-                )
+                    else
+                    {
+                        var skipKeys = skipNavigation.ForeignKey;
+                        var primaryKey = c.Entry.Metadata.FindPrimaryKey();
+                        if (primaryKey == null)
+                        {
+                            throw new NotImplementedException();
+                        }
+                        return new SkipNavigationChange(
+                            keyValues: primaryKey.Properties
+                                .Select(p =>
+                                {
+                                    var property = c.Entry.Property(p.Name);
+                                    if (property?.CurrentValue == null)
+                                    {
+                                        throw new NotImplementedException();
+                                    }
+                                    return property.CurrentValue;
+                                })
+                                .ToArray(),
+                            changeType: c.ChangeType,
+                            entityTypeName: c.Entry.Metadata.Name,
+                            declaringEntityTypeName: skipNavigation.DeclaringEntityType.Name,
+                            declaringKeyValues: skipNavigation.ForeignKey.Properties
+                                .Select(p =>
+                                {
+                                    var property = c.Entry.Property(p.Name);
+                                    if (property?.CurrentValue == null)
+                                    {
+                                        throw new NotImplementedException();
+                                    }
+                                    return property.CurrentValue;
+                                })
+                                .ToArray(),
+                            targetEntityTypeName: skipNavigation.TargetEntityType.Name,
+                            targetKeyValues: c.Entry.Properties
+                                .Where(
+                                    p =>
+                                        !skipNavigation.ForeignKey.Properties.Any(
+                                            skipProp => skipProp == p.Metadata
+                                        )
+                                )
+                                .Select(p =>
+                                {
+                                    var property = c.Entry.Property(p.Metadata.Name);
+                                    if (property?.CurrentValue == null)
+                                    {
+                                        throw new NotImplementedException();
+                                    }
+                                    return property.CurrentValue;
+                                })
+                                .ToArray(),
+                            navigationPropertyName: skipNavigation.PropertyInfo!.Name
+                        );
+                    }
+                })
                 .ToArray();
         }
 

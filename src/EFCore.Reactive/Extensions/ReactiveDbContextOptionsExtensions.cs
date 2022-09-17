@@ -17,6 +17,7 @@ namespace Microsoft.EntityFrameworkCore
             AddReactiveDbContext<TReactiveDbContext>(
                 services,
                 subject,
+                subject,
                 optionsAction,
                 contextLifetime,
                 optionsLifetime

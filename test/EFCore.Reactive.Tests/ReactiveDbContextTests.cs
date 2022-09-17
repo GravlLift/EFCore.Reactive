@@ -45,8 +45,9 @@ namespace EFCore.Reactive.Tests
             var context1 = provider
                 .CreateScope()
                 .ServiceProvider.GetRequiredService<TestDbContext>();
-            var sp2 = provider.CreateScope().ServiceProvider;
-            var context2 = sp2.GetRequiredService<TestDbContext>();
+            var context2 = provider
+                .CreateScope()
+                .ServiceProvider.GetRequiredService<TestDbContext>();
 
             context1.TestEntities.Add(new() { Name = "Test" });
             context1.SaveChanges();
@@ -54,14 +55,13 @@ namespace EFCore.Reactive.Tests
             Assert.That(context2.TestEntities.Local, Has.Exactly(1).Items);
         }
 
-
         [Test]
         public async Task Should_send_object_to_listener()
         {
             var context = provider
                 .CreateScope()
                 .ServiceProvider.GetRequiredService<TestDbContext>();
-            var changeTask = context.Changes<TestEntity>().ToTask();
+            var changeTask = context.TestEntities.Changes().ToTask();
 
             context.TestEntities.Add(new() { Name = "Test" });
             context.SaveChanges();

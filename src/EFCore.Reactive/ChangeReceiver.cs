@@ -1,198 +1,205 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Internal;
-using Microsoft.EntityFrameworkCore.Metadata;
 using System.Collections;
 using System.Linq.Expressions;
 using System.Reactive.Linq;
-using System.Reflection;
+using System.Reactive.Subjects;
 
 namespace EFCore.Reactive
 {
-    public sealed class ChangeReceiver
+    public sealed class ChangeReceiver : IDisposable
     {
-        public IObservable<Change<dynamic>[]> Changes { get; private set; }
+        public IObservable<Change<dynamic>[]> Changes => changes;
 
         private readonly DbContext context;
+        private readonly Subject<Change<dynamic>[]> changes;
+        private IDisposable subscription;
 
         public ChangeReceiver(DbContext context, IObservable<EntityChange[]> observable)
         {
             this.context = context;
-            Changes = observable
-                .Select(OnDbContextChanges)
-                .Catch((ObjectDisposedException ex) => Observable.Empty<Change<dynamic>[]>());
+            subscription = observable.Subscribe((changes) => OnDbContextChanges(changes));
+            changes = new();
         }
 
-        private Change<dynamic>[] OnDbContextChanges(EntityChange[] changes)
+        private void OnDbContextChanges(EntityChange[] changes)
         {
-                #region Parse Changes and write to DbContext
-            List<Change<dynamic>> modifiedObjects = new();
-            foreach (var change in changes)
+            try
             {
-                var existingEntry = FindTracked(change.EntityTypeName, change.KeyValues);
-                var entityType = context.Model.FindEntityType(change.EntityTypeName);
-
-                if (entityType == null)
+            #region Parse Changes and write to DbContext
+                List<Change<dynamic>> modifiedObjects = new();
+                foreach (var change in changes)
                 {
-                    throw new InvalidOperationException(
-                        $"Entity type name '{change.EntityTypeName}' does not have an associated entity type"
-                    );
-                }
+                    var existingEntry = FindTracked(change.EntityTypeName, change.KeyValues);
+                    var entityType = context.Model.FindEntityType(change.EntityTypeName);
 
-                switch (change.ChangeType)
-                {
-                    case EntityState.Added:
+                    if (entityType == null)
                     {
-                        if (existingEntry == null)
+                        throw new InvalidOperationException(
+                            $"Entity type name '{change.EntityTypeName}' does not have an associated entity type"
+                        );
+                    }
+
+                    switch (change.ChangeType)
+                    {
+                        case EntityState.Added:
                         {
-                            EntityEntry? newEntityEntry;
-                            if (
-                                change
-                                is ObserverSaveChangesInterceptor.PropertiesChange propertiesChange
-                            )
+                            if (existingEntry == null)
                             {
-                                if (entityType.ConstructorBinding == null)
+                                EntityEntry? newEntityEntry;
+                                if (
+                                    change
+                                    is ObserverSaveChangesInterceptor.PropertiesChange propertiesChange
+                                )
                                 {
-                                    throw new NotImplementedException();
-                                }
-
-                                // Create a clone of the object in memory
-                                var constructorExpression =
-                                    entityType.ConstructorBinding.CreateConstructorExpression(
-                                        new(entityType, null!)
-                                    );
-                                var entity =
-                                    constructorExpression is NewExpression newExpression
-                                    && newExpression.Constructor != null
-                                        ? newExpression.Constructor.Invoke(null)
-                                        : throw new NotImplementedException();
-
-                                newEntityEntry = context.Entry(entity);
-                                SetEntityEntryValues(propertiesChange, newEntityEntry);
-                                newEntityEntry = context.Add(newEntityEntry.Entity);
-                            }
-                            else if (
-                                change
-                                is ObserverSaveChangesInterceptor.SkipNavigationChange skipNavigationChange
-                            )
-                            {
-                                var declaringEntityType = context.Model.FindEntityType(
-                                    skipNavigationChange.DeclaringEntityTypeName
-                                );
-                                var declaringEntityEntry = FindTracked(
-                                    skipNavigationChange.DeclaringEntityTypeName,
-                                    skipNavigationChange.DeclaringKeyValues
-                                );
-                                if (declaringEntityEntry == null)
-                                {
-                                    break;
-                                }
-
-                                var targetEntityType = context.Model.FindEntityType(
-                                    skipNavigationChange.TargetEntityTypeName
-                                );
-
-                                var targetEntityEntry = FindTracked(
-                                    skipNavigationChange.TargetEntityTypeName,
-                                    skipNavigationChange.TargetKeyValues
-                                );
-                                if (targetEntityEntry == null)
-                                {
-                                    break;
-                                }
-
-                                var navigation = declaringEntityEntry.Navigation(
-                                    skipNavigationChange.NavigationPropertyName
-                                );
-
-                                if (navigation is CollectionEntry collectionEntry)
-                                {
-                                    if (collectionEntry.CurrentValue == null)
+                                    if (entityType.ConstructorBinding == null)
                                     {
-                                        // Create an empty collection
-                                        collectionEntry.CurrentValue = (IEnumerable)
-                                            typeof(List<>)
-                                                .MakeGenericType(targetEntityType!.ClrType)
-                                                .GetConstructor(Array.Empty<Type>())!
-                                                .Invoke(Array.Empty<object>());
+                                        throw new NotImplementedException();
                                     }
-                                    // Add the incoming object to the new collection
-                                    collectionEntry.CurrentValue
-                                        .GetType()
-                                        .GetMethod(nameof(ICollection<object>.Add))!
-                                        .Invoke(
-                                            collectionEntry.CurrentValue,
-                                            new[] { targetEntityEntry.Entity }
+
+                                    // Create a clone of the object in memory
+                                    var constructorExpression =
+                                        entityType.ConstructorBinding.CreateConstructorExpression(
+                                            new(entityType, null!)
                                         );
+                                    var entity =
+                                        constructorExpression is NewExpression newExpression
+                                        && newExpression.Constructor != null
+                                            ? newExpression.Constructor.Invoke(null)
+                                            : throw new NotImplementedException();
 
-                                    newEntityEntry = FindTracked(
-                                        skipNavigationChange.EntityTypeName,
-                                        skipNavigationChange.DeclaringKeyValues
-                                            .Concat(skipNavigationChange.TargetKeyValues)
-                                            .ToArray()
+                                    newEntityEntry = context.Entry(entity);
+                                    SetEntityEntryValues(propertiesChange, newEntityEntry);
+                                    newEntityEntry = context.Add(newEntityEntry.Entity);
+                                }
+                                else if (
+                                    change
+                                    is ObserverSaveChangesInterceptor.SkipNavigationChange skipNavigationChange
+                                )
+                                {
+                                    var declaringEntityType = context.Model.FindEntityType(
+                                        skipNavigationChange.DeclaringEntityTypeName
                                     );
-
-                                    if (newEntityEntry == null)
+                                    var declaringEntityEntry = FindTracked(
+                                        skipNavigationChange.DeclaringEntityTypeName,
+                                        skipNavigationChange.DeclaringKeyValues
+                                    );
+                                    if (declaringEntityEntry == null)
                                     {
                                         break;
+                                    }
+
+                                    var targetEntityType = context.Model.FindEntityType(
+                                        skipNavigationChange.TargetEntityTypeName
+                                    );
+
+                                    var targetEntityEntry = FindTracked(
+                                        skipNavigationChange.TargetEntityTypeName,
+                                        skipNavigationChange.TargetKeyValues
+                                    );
+                                    if (targetEntityEntry == null)
+                                    {
+                                        break;
+                                    }
+
+                                    var navigation = declaringEntityEntry.Navigation(
+                                        skipNavigationChange.NavigationPropertyName
+                                    );
+
+                                    if (navigation is CollectionEntry collectionEntry)
+                                    {
+                                        if (collectionEntry.CurrentValue == null)
+                                        {
+                                            // Create an empty collection
+                                            collectionEntry.CurrentValue = (IEnumerable)
+                                                typeof(List<>)
+                                                    .MakeGenericType(targetEntityType!.ClrType)
+                                                    .GetConstructor(Array.Empty<Type>())!
+                                                    .Invoke(Array.Empty<object>());
+                                        }
+                                        // Add the incoming object to the new collection
+                                        collectionEntry.CurrentValue
+                                            .GetType()
+                                            .GetMethod(nameof(ICollection<object>.Add))!
+                                            .Invoke(
+                                                collectionEntry.CurrentValue,
+                                                new[] { targetEntityEntry.Entity }
+                                            );
+
+                                        newEntityEntry = FindTracked(
+                                            skipNavigationChange.EntityTypeName,
+                                            skipNavigationChange.DeclaringKeyValues
+                                                .Concat(skipNavigationChange.TargetKeyValues)
+                                                .ToArray()
+                                        );
+
+                                        if (newEntityEntry == null)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        throw new NotImplementedException();
                                     }
                                 }
                                 else
                                 {
                                     throw new NotImplementedException();
                                 }
+                                newEntityEntry.State = EntityState.Unchanged;
+
+                                modifiedObjects.Add(
+                                    new Change<dynamic>(
+                                        ChangeType.CreateOrUpdate,
+                                        newEntityEntry.Entity
+                                    )
+                                );
                             }
-                            else
+                            break;
+                        }
+                        case EntityState.Deleted:
+                            if (existingEntry != null)
                             {
-                                throw new NotImplementedException();
+                                context.Remove(existingEntry.Entity);
+                                existingEntry.State = EntityState.Detached;
+
+                                modifiedObjects.Add(
+                                    new Change<dynamic>(ChangeType.Delete, existingEntry.Entity)
+                                );
                             }
-                            newEntityEntry.State = EntityState.Unchanged;
-
-                            modifiedObjects.Add(
-                                new Change<dynamic>(
-                                    ChangeType.CreateOrUpdate,
-                                    newEntityEntry.Entity
-                                )
-                            );
-                        }
-                        break;
-                    }
-                    case EntityState.Deleted:
-                        if (existingEntry != null)
+                            break;
+                        case EntityState.Modified:
                         {
-                            context.Remove(existingEntry.Entity);
-                            existingEntry.State = EntityState.Detached;
+                            if (
+                                existingEntry != null
+                                && change
+                                    is ObserverSaveChangesInterceptor.PropertiesChange propertiesChange
+                            )
+                            {
+                                SetEntityEntryValues(propertiesChange, existingEntry);
+                                existingEntry.State = EntityState.Unchanged;
 
-                            modifiedObjects.Add(
-                                new Change<dynamic>(ChangeType.Delete, existingEntry.Entity)
-                            );
+                                modifiedObjects.Add(
+                                    new Change<dynamic>(
+                                        ChangeType.CreateOrUpdate,
+                                        existingEntry.Entity
+                                    )
+                                );
+                            }
+                            break;
                         }
-                        break;
-                    case EntityState.Modified:
-                    {
-                        if (
-                            existingEntry != null
-                            && change
-                                is ObserverSaveChangesInterceptor.PropertiesChange propertiesChange
-                        )
-                        {
-                            SetEntityEntryValues(propertiesChange, existingEntry);
-                            existingEntry.State = EntityState.Unchanged;
-
-                            modifiedObjects.Add(
-                                new Change<dynamic>(ChangeType.CreateOrUpdate, existingEntry.Entity)
-                            );
-                        }
-                        break;
                     }
                 }
-            }
                 #endregion
-            return modifiedObjects.ToArray();
+                this.changes.OnNext(modifiedObjects.ToArray());
+            }
+            catch (ObjectDisposedException)
+            {
+                subscription?.Dispose();
+            }
         }
-
-        private static Func<Change<object>, Change<TResult>> GetChangeConvertFunction<TResult>()
-            where TResult : class => c => new Change<TResult>(c.Type, (TResult)c.Entity);
 
         private static void SetEntityEntryValues(
             ObserverSaveChangesInterceptor.PropertiesChange change,
@@ -269,17 +276,21 @@ namespace EFCore.Reactive
         {
             var entityType = context.Model.FindEntityType(entityTypeName);
             if (entityType == null)
+            {
                 throw new ArgumentException(
                     $"Could not find entity type {entityTypeName}",
                     nameof(entityTypeName)
                 );
+            }
 
             var key = entityType.FindPrimaryKey();
             if (key == null)
+            {
                 throw new ArgumentException(
                     $"Entity type {entityTypeName} does not have a primary key",
                     nameof(entityTypeName)
                 );
+            }
 
             for (var i = 0; i < key.Properties.Count; i++)
             {
@@ -293,5 +304,25 @@ namespace EFCore.Reactive
             return internalEntry != null ? context.Entry(internalEntry.Entity) : null;
         }
 #pragma warning restore EF1001 // Internal EF Core API usage.
+
+        private void Dispose(bool disposing)
+        {
+            if (subscription != null)
+            {
+                if (disposing)
+                {
+                    subscription.Dispose();
+                }
+
+                subscription = null!;
+            }
+        }
+
+        public void Dispose()
+        {
+            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
+        }
     }
 }
