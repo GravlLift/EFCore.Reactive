@@ -1,7 +1,8 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 
 namespace EFCore.Reactive.Tests
 {
@@ -58,13 +59,16 @@ namespace EFCore.Reactive.Tests
         [Test]
         public async Task Should_send_object_to_listener()
         {
-            var context = provider
+            var context1 = provider
                 .CreateScope()
                 .ServiceProvider.GetRequiredService<TestDbContext>();
-            var changeTask = context.TestEntities.Changes().ToTask();
+            var context2 = provider
+                .CreateScope()
+                .ServiceProvider.GetRequiredService<TestDbContext>();
+            var changeTask = context2.TestEntities.Changes().FirstAsync().ToTask();
 
-            context.TestEntities.Add(new() { Name = "Test" });
-            context.SaveChanges();
+            context1.TestEntities.Add(new() { Name = "Test" });
+            context1.SaveChanges();
 
             var result = await changeTask;
             Assert.That(result, Has.Exactly(1).Items);
