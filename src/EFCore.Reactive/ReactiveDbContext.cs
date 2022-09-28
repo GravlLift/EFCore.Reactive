@@ -371,7 +371,7 @@ namespace EFCore.Reactive
                     changes.Dispose();
                 }
 
-                changes = null;
+                changes = null!;
             }
         }
 
