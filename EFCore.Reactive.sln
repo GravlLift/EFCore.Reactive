@@ -11,6 +11,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EFCore.Reactive", "src\EFCo
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EFCore.Reactive.Tests", "test\EFCore.Reactive.Tests\EFCore.Reactive.Tests.csproj", "{65687DE8-7DFC-42DC-B951-3F9BCD4CF01F}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GravlLift.Toolbox", "..\Toolbox\Toolbox\GravlLift.Toolbox.csproj", "{67A679F3-CC39-45D5-8F52-7DBCC604AA94}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -25,6 +27,10 @@ Global
 		{65687DE8-7DFC-42DC-B951-3F9BCD4CF01F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{65687DE8-7DFC-42DC-B951-3F9BCD4CF01F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{65687DE8-7DFC-42DC-B951-3F9BCD4CF01F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{67A679F3-CC39-45D5-8F52-7DBCC604AA94}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{67A679F3-CC39-45D5-8F52-7DBCC604AA94}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{67A679F3-CC39-45D5-8F52-7DBCC604AA94}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{67A679F3-CC39-45D5-8F52-7DBCC604AA94}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -32,6 +38,7 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{475A0D82-3770-45CC-8871-EB72CC3EF80C} = {83DFF76B-64C4-447B-BD20-2267E16E4B50}
 		{65687DE8-7DFC-42DC-B951-3F9BCD4CF01F} = {4CBBA213-3A35-4FD5-A52E-5A3EB78133E2}
+		{67A679F3-CC39-45D5-8F52-7DBCC604AA94} = {83DFF76B-64C4-447B-BD20-2267E16E4B50}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {204B7158-B139-4E4F-923C-8EE8DC868005}
