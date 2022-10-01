@@ -1,11 +1,11 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
-using Microsoft.EntityFrameworkCore.Internal;
+﻿using System.Collections;
 using System.Linq.Expressions;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Collections;
 using System.Reflection;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Internal;
 
 namespace EFCore.Reactive
 {
@@ -25,6 +25,98 @@ namespace EFCore.Reactive
 
         internal IObservable<IReadOnlyCollection<Change<T>>> Changes<T>() where T : class =>
             changes.Select(changes => changes.OfType<Change<T>>().ToArray());
+
+        public void Merge(object entity) => MergeInternal(entity, new HashSet<object>());
+
+        private void MergeInternal(object entity, HashSet<object> entitiesTraversed)
+        {
+            if (entity == null)
+            {
+                return;
+            }
+
+            entitiesTraversed.Add(entity);
+
+            var type = entity.GetType();
+
+            if (type.IsAssignableTo(typeof(IEnumerable)))
+            {
+                foreach (var item in (IEnumerable)entity)
+                {
+                    MergeInternal(item, entitiesTraversed);
+                }
+                return;
+            }
+
+            var entityType = Model.FindRuntimeEntityType(type);
+
+            if (entityType == null)
+            {
+                //throw new InvalidOperationException(
+                //    $"Type '{type.Name}' does not have an associated entity type"
+                //);
+                return;
+            }
+
+            var primaryKey = entityType.FindPrimaryKey();
+
+            if (primaryKey == null)
+            {
+                throw new InvalidOperationException(
+                    $"Type '{type.Name} does not have an associated entity type"
+                );
+            }
+
+            var primaryKeyValues = primaryKey.Properties
+                .Where(keyProp => keyProp.PropertyInfo != null)
+                .Select(keyProp =>
+                {
+                    var value = keyProp.PropertyInfo!.GetValue(entity);
+                    if (value == null)
+                    {
+                        throw new NotImplementedException(
+                            $"{entityType.Name}.{keyProp.Name} does not have a value"
+                        );
+                    }
+                    return value;
+                });
+
+            var entityEntry = FindTracked(entityType.Name, primaryKeyValues.ToArray());
+
+            if (entityEntry == null)
+            {
+                entityEntry = Entry(entity);
+                entityEntry.State = EntityState.Added;
+            }
+            else
+            {
+                // Entity exists already, update the values
+                var properties = entityType
+                    .GetProperties()
+                    .Where(prop => prop.PropertyInfo != null)
+                    .ToDictionary(
+                        prop => prop.PropertyInfo!.Name,
+                        prop => prop.PropertyInfo!.GetValue(entity)
+                    );
+
+                SetEntityEntryValues(entityEntry, properties);
+            }
+
+            foreach (var navigation in entityType.GetNavigations())
+            {
+                if (navigation.PropertyInfo == null)
+                {
+                    throw new InvalidOperationException();
+                }
+
+                var navigationValue = navigation.PropertyInfo.GetValue(entity);
+
+                if (navigationValue != null && !entitiesTraversed.Contains(navigationValue))
+                {
+                    MergeInternal(navigationValue, entitiesTraversed);
+                }
+            }
+        }
 
         private void OnDbContextChanges(EntityChange[] changes)
         {
@@ -73,7 +165,10 @@ namespace EFCore.Reactive
                                             : throw new NotImplementedException();
 
                                     newEntityEntry = Entry(entity);
-                                    SetEntityEntryValues(propertiesChange, newEntityEntry);
+                                    SetEntityEntryValues(
+                                        newEntityEntry,
+                                        propertiesChange.ChangedProperties
+                                    );
                                     newEntityEntry = Add(newEntityEntry.Entity);
                                 }
                                 else if (
@@ -112,15 +207,12 @@ namespace EFCore.Reactive
 
                                     if (navigation is CollectionEntry collectionEntry)
                                     {
-                                        if (collectionEntry.CurrentValue == null)
-                                        {
-                                            // Create an empty collection
-                                            collectionEntry.CurrentValue = (IEnumerable)
-                                                typeof(List<>)
-                                                    .MakeGenericType(targetEntityType!.ClrType)
-                                                    .GetConstructor(Array.Empty<Type>())!
-                                                    .Invoke(Array.Empty<object>());
-                                        }
+                                        // Create an empty collection
+                                        collectionEntry.CurrentValue ??= (IEnumerable)
+                                            typeof(List<>)
+                                                .MakeGenericType(targetEntityType!.ClrType)
+                                                .GetConstructor(Array.Empty<Type>())!
+                                                .Invoke(Array.Empty<object>());
                                         // Add the incoming object to the new collection
                                         collectionEntry.CurrentValue
                                             .GetType()
@@ -210,7 +302,10 @@ namespace EFCore.Reactive
                                     is ObserverSaveChangesInterceptor.PropertiesChange propertiesChange
                             )
                             {
-                                SetEntityEntryValues(propertiesChange, existingEntry);
+                                SetEntityEntryValues(
+                                    existingEntry,
+                                    propertiesChange.ChangedProperties
+                                );
                                 existingEntry.State = EntityState.Unchanged;
 
                                 var type = existingEntry.Entity.GetType();
@@ -248,11 +343,11 @@ namespace EFCore.Reactive
         }
 
         private static void SetEntityEntryValues(
-            ObserverSaveChangesInterceptor.PropertiesChange change,
-            EntityEntry existingEntry
+            EntityEntry existingEntry,
+            Dictionary<string, object?> changes
         )
         {
-            foreach (var changedMember in change.ChangedProperties)
+            foreach (var changedMember in changes)
             {
                 var propertyType = existingEntry.CurrentValues.Properties
                     .Single(p => p.Name == changedMember.Key)
