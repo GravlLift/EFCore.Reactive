@@ -14,6 +14,24 @@ namespace EFCore.Reactive.Tests
             public string? Name { get; set; }
         }
 
+        private class TestParent
+        {
+            public int Id { get; set; }
+            public string? Name { get; set; }
+            public List<TestEntity> TestEntities { get; set; } = new();
+        }
+
+        private class TestOwnedEntity
+        {
+            public string? Name { get; set; }
+        }
+
+        private class TestOwnerEntity
+        {
+            public int Id { get; set; }
+            public TestOwnedEntity? Owned { get; set; }
+        }
+
         private class TestDbContext : ReactiveDbContext
         {
             public TestDbContext(
@@ -22,6 +40,14 @@ namespace EFCore.Reactive.Tests
             ) : base(options, observable) { }
 
             public DbSet<TestEntity> TestEntities => Set<TestEntity>();
+            public DbSet<TestParent> TestCollectionParents => Set<TestParent>();
+
+            protected override void OnModelCreating(ModelBuilder modelBuilder)
+            {
+                base.OnModelCreating(modelBuilder);
+
+                modelBuilder.Entity<TestOwnerEntity>().OwnsOne(o => o.Owned).WithOwner();
+            }
         }
 
         private readonly IServiceProvider provider;
@@ -34,6 +60,7 @@ namespace EFCore.Reactive.Tests
                 options =>
                 {
                     options.UseInMemoryDatabase(TestContext.CurrentContext.Test.FullName);
+                    options.EnableSensitiveDataLogging();
                 }
             );
 
@@ -67,11 +94,78 @@ namespace EFCore.Reactive.Tests
                 .ServiceProvider.GetRequiredService<TestDbContext>();
             var changeTask = context2.TestEntities.Changes().FirstAsync().ToTask();
 
-            context1.TestEntities.Add(new() { Name = "Test" });
+            var entity = new TestEntity { Name = "Test" };
+            context1.TestEntities.Add(entity);
             context1.SaveChanges();
 
             var result = await changeTask;
-            Assert.That(result, Has.Exactly(1).Items);
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.Entity.Id, Is.EqualTo(entity.Id));
+                Assert.That(result.Entity.Name, Is.EqualTo(entity.Name));
+            });
+        }
+
+        [Test]
+        public void Should_merge_existing()
+        {
+            var context = provider
+                .CreateScope()
+                .ServiceProvider.GetRequiredService<TestDbContext>();
+
+            // Add parent
+            var child = new TestEntity { Id = 1, Name = "Old" };
+            var parent = new TestParent
+            {
+                Id = 1,
+                Name = "Old",
+                TestEntities = new List<TestEntity> { child }
+            };
+            context.Add(parent);
+
+            // Add entities with same PKs
+            var newChildWithId = new TestEntity { Id = 2 };
+            context.Merge(
+                new TestParent
+                {
+                    Id = 1,
+                    Name = "New",
+                    TestEntities = new List<TestEntity>
+                    {
+                        new TestEntity { Id = 1, Name = "New" },
+                        newChildWithId
+                    }
+                }
+            );
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(context.TestCollectionParents.Local, Does.Contain(parent));
+                Assert.That(context.TestCollectionParents.Find(1)!.Name, Is.EqualTo("New"));
+
+                Assert.That(context.TestEntities.Local.ToArray(), Does.Contain(child));
+                Assert.That(context.TestEntities.Find(1)!.Name, Is.EqualTo("New"));
+
+                Assert.That(context.TestEntities.Local.ToArray(), Does.Contain(newChildWithId));
+            });
+        }
+
+        [Test]
+        public void Should_merge_owned_entities()
+        {
+            var context = provider
+                .CreateScope()
+                .ServiceProvider.GetRequiredService<TestDbContext>();
+
+            // Add entities with same PKs
+            var owned = new TestOwnedEntity { Name = "Owned" };
+            var owner = new TestOwnerEntity { Id = 1, Owned = owned };
+            context.Merge(owner);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(context.Set<TestOwnerEntity>().Local, Does.Contain(owner));
+            });
         }
     }
 }

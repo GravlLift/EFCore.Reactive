@@ -2,7 +2,8 @@
 {
     public enum ChangeType
     {
-        CreateOrUpdate,
+        Create,
+        Update,
         Delete
     }
 }

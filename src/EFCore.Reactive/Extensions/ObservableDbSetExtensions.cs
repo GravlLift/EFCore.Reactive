@@ -5,12 +5,15 @@ namespace Microsoft.EntityFrameworkCore
 {
     public static class ObservableDbSetExtensions
     {
-        public static IObservable<IReadOnlyCollection<Change<TEntity>>> Changes<TEntity>(
+        public static IObservable<Change<TEntity>> Changes<TEntity>(this DbSet<TEntity> dbSet)
+            where TEntity : class =>
+            ((ReactiveDbContext)dbSet.GetService<ICurrentDbContext>().Context).Changes<TEntity>();
+
+        public static IObservable<ICollection<TEntity>> Collection<TEntity>(
             this DbSet<TEntity> dbSet
-        ) where TEntity : class
-        {
-            var context = (ReactiveDbContext)dbSet.GetService<ICurrentDbContext>().Context;
-            return context.Changes<TEntity>();
-        }
+        ) where TEntity : class =>
+            (
+                (ReactiveDbContext)dbSet.GetService<ICurrentDbContext>().Context
+            ).Collection<TEntity>();
     }
 }

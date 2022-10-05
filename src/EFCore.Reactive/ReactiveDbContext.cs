@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -6,6 +7,7 @@ using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Internal;
+using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace EFCore.Reactive
 {
@@ -23,12 +25,88 @@ namespace EFCore.Reactive
             subscription = observable.Subscribe((changes) => OnDbContextChanges(changes));
         }
 
-        internal IObservable<IReadOnlyCollection<Change<T>>> Changes<T>() where T : class =>
-            changes.Select(changes => changes.OfType<Change<T>>().ToArray());
+        internal IObservable<Change<T>> Changes<T>() where T : class =>
+            changes.SelectMany(changes => changes.OfType<Change<T>>());
 
-        public void Merge(object entity) => MergeInternal(entity, new HashSet<object>());
+        internal IObservable<ICollection<T>> Collection<T>() where T : class =>
+            Changes<T>()
+                .Where(c => c.Type == ChangeType.Create || c.Type == ChangeType.Delete)
+                .Select(_ => Set<T>().Local);
 
-        private void MergeInternal(object entity, HashSet<object> entitiesTraversed)
+        public void Merge(object entity)
+        {
+            ChangeTracker.TrackGraph(
+                entity,
+                (EntityEntryGraphNode node) =>
+                {
+                    IKey? primaryKey;
+                    EntityEntry? primaryKeyEntity;
+                    if (node.Entry.Metadata.IsOwned())
+                    {
+                        var ownership = node.Entry.Metadata.FindOwnership();
+                        primaryKey = ownership?.PrincipalKey;
+                        primaryKeyEntity = node.SourceEntry;
+                    }
+                    else
+                    {
+                        primaryKey = node.Entry.Metadata.FindPrimaryKey();
+                        primaryKeyEntity = node.Entry;
+                    }
+
+                    if (primaryKey == null)
+                    {
+                        throw new NotImplementedException();
+                    }
+
+                    var existingEntity = FindTracked(
+                        node.Entry.Metadata.Name,
+                        primaryKey.Properties
+                            .Select(p =>
+                            {
+                                var property = primaryKeyEntity?.Property(p.Name);
+#pragma warning disable EF1001 // Internal EF Core API usage.
+                                if (
+                                    property
+                                        ?.CurrentValue?.GetType()
+                                        .IsDefaultValue(property.CurrentValue) != false
+                                )
+                                {
+                                    throw new NotImplementedException(
+                                        $"Could not get value for primary key {node.Entry.Metadata.Name}.{p.Name}"
+                                    );
+                                }
+#pragma warning restore EF1001 // Internal EF Core API usage.
+
+                                return property!.CurrentValue!;
+                            })
+                            .ToArray()
+                    );
+
+                    if (existingEntity == null)
+                    {
+                        node.Entry.State = EntityState.Added;
+                    }
+                    else
+                    {
+                        existingEntity.CurrentValues.SetValues(node.Entry.CurrentValues);
+                        existingEntity.State = EntityState.Modified;
+                    }
+                },
+                n =>
+                {
+                    if (n.Entry.State != EntityState.Detached)
+                    {
+                        return false;
+                    }
+
+                    n.NodeState!(n);
+
+                    return true;
+                }
+            );
+        }
+
+        private void MergeInternal(object? entity, HashSet<object> entitiesTraversed)
         {
             if (entity == null)
             {
@@ -52,9 +130,6 @@ namespace EFCore.Reactive
 
             if (entityType == null)
             {
-                //throw new InvalidOperationException(
-                //    $"Type '{type.Name}' does not have an associated entity type"
-                //);
                 return;
             }
 
@@ -257,13 +332,34 @@ namespace EFCore.Reactive
                                 );
                                 modifiedObjects.Add(
                                     constructor.Invoke(
-                                        new object[]
-                                        {
-                                            ChangeType.CreateOrUpdate,
-                                            newEntityEntry.Entity
-                                        }
+                                        new object[] { ChangeType.Create, newEntityEntry.Entity }
                                     )
                                 );
+                            }
+                            else
+                            {
+                                if (
+                                    change
+                                    is ObserverSaveChangesInterceptor.PropertiesChange propertiesChange
+                                )
+                                {
+                                    // Notify about property adds, even if it was me who did the add
+                                    var type = existingEntry.Entity.GetType();
+                                    var constructor = changeConstructors.GetOrAdd(
+                                        type,
+                                        () =>
+                                            typeof(Change<>)
+                                                .MakeGenericType(type)
+                                                .GetConstructor(
+                                                    new Type[] { typeof(ChangeType), type }
+                                                )!
+                                    );
+                                    modifiedObjects.Add(
+                                        constructor.Invoke(
+                                            new object[] { ChangeType.Create, existingEntry.Entity }
+                                        )
+                                    );
+                                }
                             }
                             break;
                         }
@@ -285,11 +381,7 @@ namespace EFCore.Reactive
                                 );
                                 modifiedObjects.Add(
                                     constructor.Invoke(
-                                        new object[]
-                                        {
-                                            ChangeType.CreateOrUpdate,
-                                            existingEntry.Entity
-                                        }
+                                        new object[] { ChangeType.Delete, existingEntry.Entity }
                                     )
                                 );
                             }
@@ -320,11 +412,7 @@ namespace EFCore.Reactive
                                 );
                                 modifiedObjects.Add(
                                     constructor.Invoke(
-                                        new object[]
-                                        {
-                                            ChangeType.CreateOrUpdate,
-                                            existingEntry.Entity
-                                        }
+                                        new object[] { ChangeType.Update, existingEntry.Entity }
                                     )
                                 );
                             }
