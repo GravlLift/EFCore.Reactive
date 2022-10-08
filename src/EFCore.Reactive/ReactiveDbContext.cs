@@ -39,19 +39,7 @@ namespace EFCore.Reactive
                 entity,
                 (EntityEntryGraphNode node) =>
                 {
-                    IKey? primaryKey;
-                    EntityEntry? primaryKeyEntity;
-                    if (node.Entry.Metadata.IsOwned())
-                    {
-                        var ownership = node.Entry.Metadata.FindOwnership();
-                        primaryKey = ownership?.PrincipalKey;
-                        primaryKeyEntity = node.SourceEntry;
-                    }
-                    else
-                    {
-                        primaryKey = node.Entry.Metadata.FindPrimaryKey();
-                        primaryKeyEntity = node.Entry;
-                    }
+                    IKey? primaryKey = node.Entry.Metadata.FindPrimaryKey();
 
                     if (primaryKey == null)
                     {
@@ -63,21 +51,30 @@ namespace EFCore.Reactive
                         primaryKey.Properties
                             .Select(p =>
                             {
-                                var property = primaryKeyEntity?.Property(p.Name);
-#pragma warning disable EF1001 // Internal EF Core API usage.
-                                if (
-                                    property
-                                        ?.CurrentValue?.GetType()
-                                        .IsDefaultValue(property.CurrentValue) != false
-                                )
+                                object? currentValue;
+                                if (p.IsForeignKey())
                                 {
-                                    throw new NotImplementedException(
-                                        $"Could not get value for primary key {node.Entry.Metadata.Name}.{p.Name}"
+                                    var principal = p.GetPrincipals()
+                                        .Single(principals => principals != p);
+
+                                    currentValue = principal.PropertyInfo?.GetValue(
+                                        node.SourceEntry.Entity
+                                    );
+                                }
+                                else
+                                {
+                                    currentValue = node.Entry.Property(p.Name).CurrentValue;
+                                }
+#pragma warning disable EF1001 // Internal EF Core API usage.
+                                if (currentValue?.GetType().IsDefaultValue(currentValue) != false)
+                                {
+                                    throw new InvalidOperationException(
+                                        $"Value for primary key {node.Entry.Metadata.Name}.{p.Name} has not been set"
                                     );
                                 }
 #pragma warning restore EF1001 // Internal EF Core API usage.
 
-                                return property!.CurrentValue!;
+                                return currentValue!;
                             })
                             .ToArray()
                     );
@@ -519,6 +516,10 @@ namespace EFCore.Reactive
                     $"Entity type {entityTypeName} does not have a primary key",
                     nameof(entityTypeName)
                 );
+            }
+            else if (key.Properties.Count != keyValues.Length)
+            {
+                throw new NotImplementedException();
             }
 
             for (var i = 0; i < key.Properties.Count; i++)

@@ -21,7 +21,12 @@ namespace EFCore.Reactive.Tests
             public List<TestEntity> TestEntities { get; set; } = new();
         }
 
-        private class TestOwnedEntity
+        private class TestOwnedOneEntity
+        {
+            public string? Name { get; set; }
+        }
+
+        private class TestOwnedManyEntity
         {
             public string? Name { get; set; }
         }
@@ -29,7 +34,8 @@ namespace EFCore.Reactive.Tests
         private class TestOwnerEntity
         {
             public int Id { get; set; }
-            public TestOwnedEntity? Owned { get; set; }
+            public TestOwnedOneEntity? OwnedOne { get; set; }
+            public List<TestOwnedManyEntity> OwnedMany { get; set; } = new();
         }
 
         private class TestDbContext : ReactiveDbContext
@@ -46,7 +52,11 @@ namespace EFCore.Reactive.Tests
             {
                 base.OnModelCreating(modelBuilder);
 
-                modelBuilder.Entity<TestOwnerEntity>().OwnsOne(o => o.Owned).WithOwner();
+                modelBuilder.Entity<TestOwnerEntity>(testOwnerEb =>
+                {
+                    testOwnerEb.OwnsOne(o => o.OwnedOne).WithOwner();
+                    testOwnerEb.OwnsMany(o => o.OwnedMany).WithOwner();
+                });
             }
         }
 
@@ -151,15 +161,37 @@ namespace EFCore.Reactive.Tests
         }
 
         [Test]
-        public void Should_merge_owned_entities()
+        public void Should_merge_owned_one_entities()
         {
             var context = provider
                 .CreateScope()
                 .ServiceProvider.GetRequiredService<TestDbContext>();
 
             // Add entities with same PKs
-            var owned = new TestOwnedEntity { Name = "Owned" };
-            var owner = new TestOwnerEntity { Id = 1, Owned = owned };
+            var owned = new TestOwnedOneEntity { Name = "Owned" };
+            var owner = new TestOwnerEntity { Id = 1, OwnedOne = owned };
+            context.Merge(owner);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(context.Set<TestOwnerEntity>().Local, Does.Contain(owner));
+            });
+        }
+
+        [Test]
+        public void Should_merge_owned_many_entities()
+        {
+            var context = provider
+                .CreateScope()
+                .ServiceProvider.GetRequiredService<TestDbContext>();
+
+            // Add entities with same PKs
+            var owned = new TestOwnedManyEntity { Name = "Owned" };
+            var owner = new TestOwnerEntity
+            {
+                Id = 1,
+                OwnedMany = new List<TestOwnedManyEntity> { owned }
+            };
             context.Merge(owner);
 
             Assert.Multiple(() =>
