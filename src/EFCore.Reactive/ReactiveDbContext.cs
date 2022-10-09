@@ -4,10 +4,12 @@ using System.Linq.Expressions;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
+using System.Xml.Linq;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Internal;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
 
 namespace EFCore.Reactive
 {
@@ -39,8 +41,7 @@ namespace EFCore.Reactive
                 entity,
                 (EntityEntryGraphNode node) =>
                 {
-                    IKey? primaryKey = node.Entry.Metadata.FindPrimaryKey();
-
+                    var primaryKey = node.Entry.Metadata.FindPrimaryKey();
                     if (primaryKey == null)
                     {
                         throw new NotImplementedException();
@@ -49,33 +50,40 @@ namespace EFCore.Reactive
                     var existingEntity = FindTracked(
                         node.Entry.Metadata.Name,
                         primaryKey.Properties
-                            .Select(p =>
-                            {
-                                object? currentValue;
-                                if (p.IsForeignKey())
+                            .Select(
+                                (p) =>
                                 {
-                                    var principal = p.GetPrincipals()
-                                        .Single(principals => principals != p);
+                                    object? currentValue;
+                                    if (node.Entry.Metadata.IsOwned() && p.IsForeignKey())
+                                    {
+                                        var ownerPk = p.GetContainingForeignKeys()
+                                            .Single()
+                                            .PrincipalKey;
+                                        currentValue = node.SourceEntry!
+                                            .Property(ownerPk.Properties.Single().Name)
+                                            .CurrentValue;
+                                    }
+                                    else
+                                    {
+                                        currentValue = node.Entry.Property(p.Name).CurrentValue;
+                                    }
 
-                                    currentValue = principal.PropertyInfo?.GetValue(
-                                        node.SourceEntry.Entity
-                                    );
-                                }
-                                else
-                                {
-                                    currentValue = node.Entry.Property(p.Name).CurrentValue;
-                                }
 #pragma warning disable EF1001 // Internal EF Core API usage.
-                                if (currentValue?.GetType().IsDefaultValue(currentValue) != false)
-                                {
-                                    throw new InvalidOperationException(
-                                        $"Value for primary key {node.Entry.Metadata.Name}.{p.Name} has not been set"
-                                    );
-                                }
+                                    if (
+                                        currentValue?.GetType().IsDefaultValue(currentValue)
+                                        != false
+                                    )
 #pragma warning restore EF1001 // Internal EF Core API usage.
-
-                                return currentValue!;
-                            })
+                                    {
+                                        {
+                                            throw new InvalidOperationException(
+                                                $"Value for primary key {node.Entry.Metadata.Name}.{p.Name} has not been set"
+                                            );
+                                        }
+                                    }
+                                    return currentValue!;
+                                }
+                            )
                             .ToArray()
                     );
 
@@ -85,6 +93,42 @@ namespace EFCore.Reactive
                     }
                     else
                     {
+                        foreach (var navigation in node.Entry.Navigations)
+                        {
+                            if (navigation is ReferenceEntry referenceEntry)
+                            {
+                                var referencePk =
+                                    referenceEntry.Metadata.TargetEntityType.FindPrimaryKey();
+                                if (referencePk == null)
+                                {
+                                    throw new NotImplementedException();
+                                }
+                                var existingReferenceEntity = FindTracked(
+                                    referenceEntry.Metadata.TargetEntityType.Name,
+                                    referencePk.Properties
+                                        .Select(
+                                            (p) =>
+                                            {
+                                                var ownerPk = p.GetContainingForeignKeys()
+                                                    .Single()
+                                                    .PrincipalKey.Properties.Single();
+                                                return node.Entry
+                                                    .Property(ownerPk.Name)
+                                                    .CurrentValue!;
+                                            }
+                                        )
+                                        .ToArray()
+                                );
+                                // If reference is to be merged, continue to point to the existing object,
+                                // if reference does not yet exist, assign to the new object
+                                if (existingReferenceEntity == null)
+                                {
+                                    existingEntity
+                                        .Reference(referenceEntry.Metadata.Name)
+                                        .CurrentValue = navigation.CurrentValue;
+                                }
+                            }
+                        }
                         existingEntity.CurrentValues.SetValues(node.Entry.CurrentValues);
                         existingEntity.State = EntityState.Modified;
                     }
@@ -492,7 +536,6 @@ namespace EFCore.Reactive
             }
         }
 
-#pragma warning disable EF1001 // Internal EF Core API usage.
         /// <summary>
         /// Search the context's local storage for an existing entity with matching key values to the search object.
         /// </summary>
@@ -529,11 +572,12 @@ namespace EFCore.Reactive
                     keyValues[i] = Convert.ChangeType(keyValues[i], key.Properties[i].ClrType);
                 }
             }
+#pragma warning disable EF1001 // Internal EF Core API usage.
             var stateManager = this.GetDependencies().StateManager;
             var internalEntry = stateManager.TryGetEntry(key, keyValues);
             return internalEntry != null ? Entry(internalEntry.Entity) : null;
-        }
 #pragma warning restore EF1001 // Internal EF Core API usage.
+        }
 
         private void Dispose(bool disposing)
         {

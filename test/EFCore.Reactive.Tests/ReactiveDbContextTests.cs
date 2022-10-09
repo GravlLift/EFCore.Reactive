@@ -34,6 +34,7 @@ namespace EFCore.Reactive.Tests
         private class TestOwnerEntity
         {
             public int Id { get; set; }
+            public string? Name { get; init; }
             public TestOwnedOneEntity? OwnedOne { get; set; }
             public List<TestOwnedManyEntity> OwnedMany { get; set; } = new();
         }
@@ -167,14 +168,41 @@ namespace EFCore.Reactive.Tests
                 .CreateScope()
                 .ServiceProvider.GetRequiredService<TestDbContext>();
 
-            // Add entities with same PKs
-            var owned = new TestOwnedOneEntity { Name = "Owned" };
-            var owner = new TestOwnerEntity { Id = 1, OwnedOne = owned };
-            context.Merge(owner);
+            // Add initial
+            var initialOwned = new TestOwnedOneEntity { Name = "Initial Owned" };
+            var initialOwner = new TestOwnerEntity
+            {
+                Id = 1,
+                Name = "Initial Owner",
+                OwnedOne = initialOwned
+            };
+            context.Add(initialOwner);
 
+            // Add entities with same PKs
+            var newOwned = new TestOwnedOneEntity { Name = "New Owned" };
+            var newOwner = new TestOwnerEntity
+            {
+                Id = 1,
+                Name = "New Owner",
+                OwnedOne = newOwned
+            };
+            context.Merge(newOwner);
+
+            var owner = context.Set<TestOwnerEntity>().Local.Single();
             Assert.Multiple(() =>
             {
-                Assert.That(context.Set<TestOwnerEntity>().Local, Does.Contain(owner));
+                Assert.That(
+                    owner,
+                    Is.EqualTo(initialOwner),
+                    "Owner object in context is not the intial object."
+                );
+                Assert.That(owner.Name, Is.EqualTo("New Owner"));
+                Assert.That(
+                    owner.OwnedOne,
+                    Is.EqualTo(initialOwned),
+                    "Owned object in context is not the intial object."
+                );
+                Assert.That(owner.OwnedOne!.Name, Is.EqualTo("New Owned"));
             });
         }
 
@@ -185,18 +213,42 @@ namespace EFCore.Reactive.Tests
                 .CreateScope()
                 .ServiceProvider.GetRequiredService<TestDbContext>();
 
-            // Add entities with same PKs
-            var owned = new TestOwnedManyEntity { Name = "Owned" };
-            var owner = new TestOwnerEntity
+            // Add initial
+            var initialOwned = new TestOwnedManyEntity { Name = "Initial Owned" };
+            var initialOwner = new TestOwnerEntity
             {
                 Id = 1,
-                OwnedMany = new List<TestOwnedManyEntity> { owned }
+                Name = "Initial Owner",
+                OwnedMany = new List<TestOwnedManyEntity> { initialOwned }
             };
-            context.Merge(owner);
+            context.Add(initialOwner);
 
+            // Add entities with same PKs
+            var newOwned = new TestOwnedManyEntity { Name = "New Owned" };
+            context.Entry(newOwned).Property("Id").CurrentValue = 1;
+            var newOwner = new TestOwnerEntity
+            {
+                Id = 1,
+                Name = "New Owner",
+                OwnedMany = new List<TestOwnedManyEntity> { newOwned }
+            };
+            context.Merge(newOwner);
+
+            var owner = context.Set<TestOwnerEntity>().Local.Single();
             Assert.Multiple(() =>
             {
-                Assert.That(context.Set<TestOwnerEntity>().Local, Does.Contain(owner));
+                Assert.That(
+                    owner,
+                    Is.EqualTo(initialOwner),
+                    "Owner object in context is not the intial object."
+                );
+                Assert.That(owner.Name, Is.EqualTo("New Owner"));
+                Assert.That(
+                    owner.OwnedMany.Single(),
+                    Is.EqualTo(initialOwned),
+                    "Owned object in context is not the intial object."
+                );
+                Assert.That(owner.OwnedMany.Single().Name, Is.EqualTo("New Owned"));
             });
         }
     }
