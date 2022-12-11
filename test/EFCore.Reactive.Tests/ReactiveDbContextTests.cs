@@ -12,6 +12,7 @@ namespace EFCore.Reactive.Tests
         {
             public int Id { get; set; }
             public string? Name { get; set; }
+            public TestParent? Parent { get; set; }
         }
 
         private class TestParent
@@ -189,21 +190,19 @@ namespace EFCore.Reactive.Tests
             context.Merge(newOwner);
 
             var owner = context.Set<TestOwnerEntity>().Local.Single();
-            Assert.Multiple(() =>
-            {
-                Assert.That(
-                    owner,
-                    Is.EqualTo(initialOwner),
-                    "Owner object in context is not the intial object."
-                );
-                Assert.That(owner.Name, Is.EqualTo("New Owner"));
-                Assert.That(
-                    owner.OwnedOne,
-                    Is.EqualTo(initialOwned),
-                    "Owned object in context is not the intial object."
-                );
-                Assert.That(owner.OwnedOne!.Name, Is.EqualTo("New Owned"));
-            });
+
+            Assert.That(
+                owner,
+                Is.EqualTo(initialOwner),
+                "Owner object in context is not the intial object."
+            );
+            Assert.That(owner.Name, Is.EqualTo("New Owner"));
+            Assert.That(
+                owner.OwnedOne,
+                Is.EqualTo(initialOwned),
+                "Owned object in context is not the intial object."
+            );
+            Assert.That(owner.OwnedOne?.Name, Is.EqualTo("New Owned"));
         }
 
         [Test]
@@ -250,6 +249,34 @@ namespace EFCore.Reactive.Tests
                 );
                 Assert.That(owner.OwnedMany.Single().Name, Is.EqualTo("New Owned"));
             });
+        }
+
+        [Test]
+        public void Should_merge_existing_parent()
+        {
+            var context = provider
+                .CreateScope()
+                .ServiceProvider.GetRequiredService<TestDbContext>();
+
+            // Add parent
+            var firstChild = new TestEntity { Id = 1, Name = "First" };
+            var firstParent = new TestParent
+            {
+                Id = 1,
+                Name = "Parent",
+                TestEntities = new List<TestEntity> { firstChild }
+            };
+            context.Add(firstParent);
+
+            var secondParent = new TestParent { Id = 1, Name = "Parent2" };
+            var secondChild = new TestEntity
+            {
+                Id = 2,
+                Name = "Second",
+                Parent = firstParent
+            };
+
+            context.Merge(secondChild);
         }
     }
 }

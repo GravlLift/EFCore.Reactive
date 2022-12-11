@@ -65,23 +65,9 @@ namespace EFCore.Reactive
                                     }
                                     else
                                     {
-                                        currentValue = node.Entry.Property(p.Name).CurrentValue;
+                                        currentValue = node.Entry.CurrentValues[p];
                                     }
-
-#pragma warning disable EF1001 // Internal EF Core API usage.
-                                    if (
-                                        currentValue?.GetType().IsDefaultValue(currentValue)
-                                        != false
-                                    )
-#pragma warning restore EF1001 // Internal EF Core API usage.
-                                    {
-                                        {
-                                            throw new InvalidOperationException(
-                                                $"Value for primary key {node.Entry.Metadata.Name}.{p.Name} has not been set"
-                                            );
-                                        }
-                                    }
-                                    return currentValue!;
+                                    return currentValue;
                                 }
                             )
                             .ToArray()
@@ -95,7 +81,10 @@ namespace EFCore.Reactive
                     {
                         foreach (var navigation in node.Entry.Navigations)
                         {
-                            if (navigation is ReferenceEntry referenceEntry)
+                            if (
+                                navigation is ReferenceEntry referenceEntry
+                                && referenceEntry.TargetEntry != null
+                            )
                             {
                                 var referencePk =
                                     referenceEntry.Metadata.TargetEntityType.FindPrimaryKey();
@@ -103,33 +92,65 @@ namespace EFCore.Reactive
                                 {
                                     throw new NotImplementedException();
                                 }
-                                var existingReferenceEntity = FindTracked(
-                                    referenceEntry.Metadata.TargetEntityType.Name,
-                                    referencePk.Properties
-                                        .Select(
-                                            (p) =>
+
+                                // Find the referenced entity
+                                var refrencePkValues = referencePk.Properties
+                                    .Select(
+                                        (p) =>
+                                        {
+                                            object? currentValue;
+                                            if (
+                                                referenceEntry.TargetEntry.Metadata.IsOwned()
+                                                && p.IsForeignKey()
+                                            )
                                             {
                                                 var ownerPk = p.GetContainingForeignKeys()
                                                     .Single()
-                                                    .PrincipalKey.Properties.Single();
-                                                return node.Entry
-                                                    .Property(ownerPk.Name)
-                                                    .CurrentValue!;
+                                                    .PrincipalKey;
+                                                currentValue = node.Entry!
+                                                    .Property(ownerPk.Properties.Single().Name)
+                                                    .CurrentValue;
                                             }
-                                        )
-                                        .ToArray()
+                                            else
+                                            {
+                                                currentValue = referenceEntry
+                                                    .TargetEntry
+                                                    .CurrentValues[p];
+                                            }
+                                            return currentValue;
+                                        }
+                                    )
+                                    .ToArray();
+                                var existingReferenceEntity = FindTracked(
+                                    referenceEntry.Metadata.TargetEntityType.Name,
+                                    refrencePkValues
                                 );
-                                // If reference is to be merged, continue to point to the existing object,
+                                // If reference exists, continue to point to the existing object,
                                 // if reference does not yet exist, assign to the new object
                                 if (existingReferenceEntity == null)
                                 {
-                                    existingEntity
-                                        .Reference(referenceEntry.Metadata.Name)
-                                        .CurrentValue = navigation.CurrentValue;
+                                    try
+                                    {
+                                        existingEntity
+                                            .Reference(referenceEntry.Metadata.Name)
+                                            .CurrentValue = navigation.CurrentValue;
+                                    }
+                                    catch { }
                                 }
                             }
                         }
-                        existingEntity.CurrentValues.SetValues(node.Entry.CurrentValues);
+
+                        // Update all values except primary keys
+                        foreach (
+                            var property in node.Entry.CurrentValues.Properties.Where(
+                                p => !p.IsPrimaryKey()
+                            )
+                        )
+                        {
+                            existingEntity.CurrentValues[property] = node.Entry.CurrentValues[
+                                property
+                            ];
+                        }
                         existingEntity.State = EntityState.Modified;
                     }
                 },
@@ -541,7 +562,7 @@ namespace EFCore.Reactive
         /// </summary>
         /// <param name="entry">An entry sharing the same primary key value as the entity to search for</param>
         /// <returns>The EntityEntry of the matching object, or null if it is not being tracked</returns>
-        private EntityEntry? FindTracked(string entityTypeName, object[] keyValues)
+        private EntityEntry? FindTracked(string entityTypeName, object?[] keyValues)
         {
             var entityType = Model.FindEntityType(entityTypeName);
             if (entityType == null)
@@ -562,12 +583,12 @@ namespace EFCore.Reactive
             }
             else if (key.Properties.Count != keyValues.Length)
             {
-                throw new NotImplementedException();
+                return null;
             }
 
             for (var i = 0; i < key.Properties.Count; i++)
             {
-                if (key.Properties[i].ClrType != keyValues[i].GetType())
+                if (key.Properties[i].ClrType != keyValues[i]?.GetType())
                 {
                     keyValues[i] = Convert.ChangeType(keyValues[i], key.Properties[i].ClrType);
                 }
