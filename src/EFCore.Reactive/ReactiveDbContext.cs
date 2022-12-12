@@ -140,18 +140,32 @@ namespace EFCore.Reactive
                             }
                         }
 
-                        // Update all values except primary keys
+                        // Property Updates
+                        bool propertiesModified = false;
+                        var discriminatorProperty = node.Entry.Metadata.FindDiscriminatorProperty();
                         foreach (
                             var property in node.Entry.CurrentValues.Properties.Where(
-                                p => !p.IsPrimaryKey()
+                                p => !p.IsPrimaryKey() && p != discriminatorProperty
                             )
                         )
                         {
-                            existingEntity.CurrentValues[property] = node.Entry.CurrentValues[
-                                property
-                            ];
+                            var existingValue = existingEntity.CurrentValues[property];
+                            var newValue = node.Entry.CurrentValues[property];
+                            if (
+                                (existingValue == default && newValue != default)
+                                || (existingValue != default && newValue == default)
+                                || existingValue?.Equals(newValue) != true
+                            )
+                            {
+                                existingEntity.CurrentValues[property] = node.Entry.CurrentValues[
+                                    property
+                                ];
+                                propertiesModified = true;
+                            }
                         }
-                        existingEntity.State = EntityState.Modified;
+                        existingEntity.State = propertiesModified
+                            ? EntityState.Modified
+                            : existingEntity.State;
                     }
                 },
                 n =>
@@ -166,93 +180,6 @@ namespace EFCore.Reactive
                     return true;
                 }
             );
-        }
-
-        private void MergeInternal(object? entity, HashSet<object> entitiesTraversed)
-        {
-            if (entity == null)
-            {
-                return;
-            }
-
-            entitiesTraversed.Add(entity);
-
-            var type = entity.GetType();
-
-            if (type.IsAssignableTo(typeof(IEnumerable)))
-            {
-                foreach (var item in (IEnumerable)entity)
-                {
-                    MergeInternal(item, entitiesTraversed);
-                }
-                return;
-            }
-
-            var entityType = Model.FindRuntimeEntityType(type);
-
-            if (entityType == null)
-            {
-                return;
-            }
-
-            var primaryKey = entityType.FindPrimaryKey();
-
-            if (primaryKey == null)
-            {
-                throw new InvalidOperationException(
-                    $"Type '{type.Name} does not have an associated entity type"
-                );
-            }
-
-            var primaryKeyValues = primaryKey.Properties
-                .Where(keyProp => keyProp.PropertyInfo != null)
-                .Select(keyProp =>
-                {
-                    var value = keyProp.PropertyInfo!.GetValue(entity);
-                    if (value == null)
-                    {
-                        throw new NotImplementedException(
-                            $"{entityType.Name}.{keyProp.Name} does not have a value"
-                        );
-                    }
-                    return value;
-                });
-
-            var entityEntry = FindTracked(entityType.Name, primaryKeyValues.ToArray());
-
-            if (entityEntry == null)
-            {
-                entityEntry = Entry(entity);
-                entityEntry.State = EntityState.Added;
-            }
-            else
-            {
-                // Entity exists already, update the values
-                var properties = entityType
-                    .GetProperties()
-                    .Where(prop => prop.PropertyInfo != null)
-                    .ToDictionary(
-                        prop => prop.PropertyInfo!.Name,
-                        prop => prop.PropertyInfo!.GetValue(entity)
-                    );
-
-                SetEntityEntryValues(entityEntry, properties);
-            }
-
-            foreach (var navigation in entityType.GetNavigations())
-            {
-                if (navigation.PropertyInfo == null)
-                {
-                    throw new InvalidOperationException();
-                }
-
-                var navigationValue = navigation.PropertyInfo.GetValue(entity);
-
-                if (navigationValue != null && !entitiesTraversed.Contains(navigationValue))
-                {
-                    MergeInternal(navigationValue, entitiesTraversed);
-                }
-            }
         }
 
         private void OnDbContextChanges(EntityChange[] changes)
